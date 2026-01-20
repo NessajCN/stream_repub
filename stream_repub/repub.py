@@ -26,12 +26,16 @@ class ImageRepub(Node):
     def __init__(self):
         super().__init__("image_republisher")
         self.publisher_ = self.create_publisher(Image, "image_raw", 10)
+        self.declare_parameter(
+            "stream_url",
+            "http://192.168.11.3:1985/rtc/v1/whep/?app=sensor/camera/stereo_left&stream=image",
+        )
         # timer_period = 0.05  # seconds
         # self.timer = self.create_timer(timer_period, self.timer_callback)
         # self.i = 0
 
-    def pub_ndarray(self, img: np.ndarray, encoding="bgr24"):
-        msg = CvBridge().cv2_to_imgmsg(img, encoding="passthrough")
+    def pub_ndarray(self, img: np.ndarray, encoding="bgr8"):
+        msg = CvBridge().cv2_to_imgmsg(img, encoding=encoding)
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "stream_converted"
         self.publisher_.publish(msg)
@@ -42,7 +46,8 @@ class ImageRepub(Node):
                 frame = await track.recv()
                 # Process the frame (e.g., convert to OpenCV format)
                 if frame.key_frame:
-                    logger.info("Key frame received")
+                    # logger.info("Key frame received")
+                    pass
                 img = frame.to_ndarray(format="bgr24")
                 self.pub_ndarray(img)
                 # cv2.imshow("Received Video", img)
@@ -53,7 +58,8 @@ class ImageRepub(Node):
                 break
         cv2.destroyAllWindows()
 
-    async def rtc_read(self, url: str):
+    async def rtc_read(self):
+        url = self.get_parameter("stream_url").get_parameter_value().string_value
         pc = RTCPeerConnection()
         pc.addTransceiver("video", direction="recvonly")
         pc.addTransceiver("audio", direction="recvonly")
@@ -124,16 +130,14 @@ async def on_shutdown(app):
     await asyncio.gather(*coros)
     pcs.clear()
 
+
 # def rosnode(node: Node):
 #     rclpy.spin(node)
 #     node.destroy_node()
 #     rclpy.shutdown()
 
-def main(
-    args=None,
-    url="http://192.168.11.3:1985/rtc/v1/whep/?app=sensor/camera/stereo_left&stream=image",
-    verbose=False,
-):
+
+def main(args=None, verbose=False):
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
     else:
@@ -141,7 +145,7 @@ def main(
 
     rclpy.init(args=args)
     img_repub = ImageRepub()
-    asyncio.run(img_repub.rtc_read(url))
+    asyncio.run(img_repub.rtc_read())
     # rtc_thread = threading.Thread(target=asyncio.run, args=(img_repub.rtc_read(url),))
     # rtc_thread.start()
     # rcl_thread = threading.Thread(target=rosnode, args=(img_repub,))
