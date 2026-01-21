@@ -5,6 +5,7 @@ import threading
 import uuid
 import aiohttp
 import cv2
+import yaml
 from aiohttp import ClientSession
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaRelay
@@ -13,7 +14,7 @@ import rclpy
 from cv_bridge import CvBridge
 import numpy as np
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 
 ROOT = os.path.dirname(__file__)
 
@@ -25,20 +26,32 @@ relay = MediaRelay()
 class ImageRepub(Node):
     def __init__(self):
         super().__init__("image_republisher")
-        self.publisher_ = self.create_publisher(Image, "image_raw", 10)
-        self.declare_parameter(
-            "stream_url",
-            "http://192.168.11.3:1985/rtc/v1/whep/?app=sensor/camera/stereo_left&stream=image",
-        )
+        self.img_pub_ = self.create_publisher(Image, "image_raw", 10)
+        self.cam_pub_ = self.create_publisher(CameraInfo, "camera_info", 10)
+        self.declare_parameter("stereo", "left")
+        stereo = self.get_parameter("stereo").get_parameter_value().string_value
+        self.stereo = stereo
+        try:
+            with open(f"{ROOT}/camera_info/{stereo}.yaml", "r") as fp:
+                d = yaml.load(fp, Loader=yaml.FullLoader)
+                self.camera_info = load_caminfo(d)
+        except IOError as _e:
+            self.camera_info = CameraInfo()
+
         # timer_period = 0.05  # seconds
         # self.timer = self.create_timer(timer_period, self.timer_callback)
         # self.i = 0
 
     def pub_ndarray(self, img: np.ndarray, encoding="bgr8"):
-        msg = CvBridge().cv2_to_imgmsg(img, encoding=encoding)
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "stream_converted"
-        self.publisher_.publish(msg)
+        img_msg = CvBridge().cv2_to_imgmsg(img, encoding=encoding)
+        img_msg.header.stamp = self.get_clock().now().to_msg()
+        img_msg.header.frame_id = f"stereo_{self.stereo}_rgb_link"
+
+        self.camera_info.header.stamp = img_msg.header.stamp
+        self.camera_info.header.frame_id = img_msg.header.frame_id
+
+        self.cam_pub_.publish(self.camera_info)
+        self.img_pub_.publish(img_msg)
 
     async def handle_video_track(self, track: MediaStreamTrack):
         while True:
@@ -59,7 +72,7 @@ class ImageRepub(Node):
         cv2.destroyAllWindows()
 
     async def rtc_read(self):
-        url = self.get_parameter("stream_url").get_parameter_value().string_value
+        url = f"http://192.168.11.3:1985/rtc/v1/whep/?app=sensor/camera/stereo_{self.stereo}&stream=image"
         pc = RTCPeerConnection()
         pc.addTransceiver("video", direction="recvonly")
         pc.addTransceiver("audio", direction="recvonly")
@@ -122,6 +135,18 @@ class ImageRepub(Node):
         # rclpy.spin(self)
         # await asyncio.sleep(30000)
         await asyncio.Event().wait()
+
+
+def load_caminfo(cam_dict: dict) -> CameraInfo:
+    cam_info = CameraInfo()
+    cam_info.width = cam_dict["image_width"]
+    cam_info.height = cam_dict["image_height"]
+    cam_info.distortion_model = cam_dict["distortion_model"]
+    cam_info.d = cam_dict["distortion_coefficients"]["data"]
+    cam_info.k = cam_dict["camera_matrix"]["data"]
+    cam_info.r = cam_dict["rectification_matrix"]["data"]
+    cam_info.p = cam_dict["projection_matrix"]["data"]
+    return cam_info
 
 
 async def on_shutdown(app):
